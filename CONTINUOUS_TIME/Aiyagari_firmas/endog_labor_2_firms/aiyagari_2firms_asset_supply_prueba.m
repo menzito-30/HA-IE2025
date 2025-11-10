@@ -1,6 +1,7 @@
-%% AIYAGARI MODEL WITH ENDOGENOUS LABOR SUPPLY - TWO SECTORS (FORMAL & INFORMAL)
+%% AIYAGARI MODEL WITH ENDOGENOUS LABOR SUPPLY - TWO SECTORS (FORMAL & INFORMAL) WITH TAXES
 % Based on Achdou, Han, Lasry, Lions, and Moll (2017)
-% Extension with two sectors: Formal and Informal
+% Extension with two sectors: Formal and Informal, proportional taxes on formal, government with lump-sum transfers
+% Intensive margin only; follows Pontus Rendahl's implicit method and sparsity for HJB/KF
 
 clear all; clc; close all;
 
@@ -13,7 +14,8 @@ tic; % Start timer
 % --- Household Parameters ---
 ga = 2;           % Relative risk aversion (γ)
 rho = 0.05;       % Subjective discount rate (ρ)
-Frisch = 0.5;     % Frisch elasticity of labor supply (φ)
+Frisch = 0.5;     % Frisch elasticity of labor supply (ϕ)
+tau = 0.2;        % Proportional tax on formal labor income
 
 % --- Productivity States (z) ---
 z1 = 0.2;         % Low productivity
@@ -23,11 +25,11 @@ la1 = 1;          % Poisson intensity z1 -> z2
 la2 = 1;          % Poisson intensity z2 -> z1
 la = [la1, la2];
 
-% Average productivity (for initial labor supply normalization)
+% Average productivity (for initial normalization)
 z_ave = (z1*la2 + z2*la1)/(la1 + la2);
 
 % --- Firm Parameters ---
-Aprod = 0.3;      % Total factor productivity (A)
+Aprod = 0.3;      % Base total factor productivity (A)
 al = 1/3;         % Capital share (α)
 d = 0.05;         % Depreciation rate (δ)
 
@@ -49,10 +51,11 @@ da = (amax - amin)/(I - 1);   % Grid spacing
 % Auxiliary matrices
 aa = [a, a];      % Replicate asset grid for both z states
 zz = ones(I,1)*z; % Matrix (I x 2) with z values
+tr_ones = ones(I, 2); % For adding constant tr
 
 % --- HJB Iteration Parameters ---
-maxit = 100;      % Maximum iterations
-crit = 10^(-6);   % Convergence criterion
+maxit = 100;      % Maximum iterations for HJB
+crit = 10^(-6);   % Convergence criterion for HJB
 Delta = 1000;     % Step size for implicit method
 
 % Initialize matrices
@@ -72,20 +75,24 @@ rmin = -0.045;    % Minimum interest rate
 rmax = 0.045;     % Maximum interest rate
 r_grid = linspace(rmin, rmax, Ir);
 
+% --- Transfer Iteration Parameters ---
+maxit_tr = 50;    % Max iterations for tr
+crit_tr = 1e-5;   % Convergence for tr
+
 % =========================================================================
 % 3. INITIAL GUESS (for first r)
 % =========================================================================
 r = r_grid(1);
 
-% --- Initial Firm Prices (assuming single firm for initial guess) ---
-KD_guess = (al*Aprod/(r + d))^(1/(1 - al))*z_ave;
-wF = (1 - al)*Aprod*(KD_guess/z_ave)^al;
-wI = 0.7*wF;  % Informal wage is lower (initial guess)
+% --- Initial Firm Prices ---
+kappa_F = (al * AF / (r + d)) ^ (1 / (1 - al));
+wF = (1 - al) * AF * kappa_F ^ al;
+kappa_I = (al * AI / (r + d)) ^ (1 / (1 - al));
+wI = (1 - al) * AI * kappa_I ^ al;
 
 % --- Initial Value Function Guess ---
-% Assume constant labor supply of 1 for initial guess
-v0(:,1) = (wF*z(1) + max(r,0.01)*a).^(1 - ga)/(1 - ga)/rho;
-v0(:,2) = (wF*z(2) + max(r,0.01)*a).^(1 - ga)/(1 - ga)/rho;
+v0(:,1) = ((1 - tau) * wF * z(1) + max(r, 0.01) * a) .^ (1 - ga) / (1 - ga) / rho;
+v0(:,2) = ((1 - tau) * wF * z(2) + max(r, 0.01) * a) .^ (1 - ga) / (1 - ga) / rho;
 
 % =========================================================================
 % 4. OUTER LOOP: ITERATE OVER PRICES
@@ -99,6 +106,7 @@ wF_r = zeros(Ir, 1);     % Wage formal vs r
 wI_r = zeros(Ir, 1);     % Wage informal vs r
 LF_s = zeros(Ir, 1);     % Labor supply formal
 LI_s = zeros(Ir, 1);     % Labor supply informal
+tr_r = zeros(Ir, 1);     % Transfers vs r
 
 for ir = 1:Ir
     
@@ -107,13 +115,10 @@ for ir = 1:Ir
     fprintf('\n=== Iteration %d/%d, r = %.4f ===\n', ir, Ir, r)
     
     % --- 4.1. Firm Prices (given r) ---
-    % For now, assume equal capital allocation K = KF + KI
-    % We'll iterate on wage ratio wI/wF
-    
-    % Initial guess: equal capital-labor ratios
-    kappa = (al*AF/(r + d))^(1/(1-al));
-    wF = (1 - al)*AF*kappa^al;
-    wI = (1 - al)*AI*kappa^al * (AI/AF)^(1/(1-al));
+    kappa_F = (al * AF / (r + d)) ^ (1 / (1 - al));
+    wF = (1 - al) * AF * kappa_F ^ al;
+    kappa_I = (al * AI / (r + d)) ^ (1 / (1 - al));
+    wI = (1 - al) * AI * kappa_I ^ al;
     
     wF_r(ir) = wF;
     wI_r(ir) = wI;
@@ -123,227 +128,245 @@ for ir = 1:Ir
         v0 = V_r(:,:,ir - 1);
     end
     
-    v = v0;
-    
-    % Precompute boundary labor for state constraint
-    lf_min = zeros(1,2);
-    li_min = zeros(1,2);
-    c_min = zeros(1,2);
-    dV_min = zeros(1,2);
-    
-    for j = 1:2
-        income_min = @(l) wF*z(j)*l(1) + wI*z(j)*l(2) + r*amin;
-        eq_min = @(l) [l(1)^(1/Frisch) * (income_min(l))^ga - wF*z(j);
-                       l(2)^(1/Frisch) * (income_min(l))^ga - wI*z(j)];
-        l_init = [0.5; 0.5];
-        options = optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10);
-        l_sol = fsolve(eq_min, l_init, options);
-        lf_min(j) = max(l_sol(1), 0);
-        li_min(j) = max(l_sol(2), 0);
-        c_min(j) = income_min(l_sol);
-        dV_min(j) = c_min(j)^(-ga);
-    end
-    
-    % =====================================================================
-    % 5. INNER LOOP: SOLVE HJB (given r, wF, wI)
-    % =====================================================================
-    
-    for n = 1:maxit
-        V = v;
+    % --- 4.3. Inner Loop for Transfers (tr) ---
+    tr = 0;  % Initial guess
+    for itr = 1:maxit_tr
+        v = v0;
         
-        % --- 5.1. Finite Difference Approximations ---
-        % Forward derivative
-        dVf(1:I-1,:) = (V(2:I,:) - V(1:I-1,:))/da;
-        % Backward derivative
-        dVb(2:I,:) = (V(2:I,:) - V(1:I-1,:))/da;
+        % Precompute boundary labor for state constraint at amin
+        lf_min = zeros(1,2);
+        li_min = zeros(1,2);
+        c_min = zeros(1,2);
+        dV_min = zeros(1,2);
         
-        % --- 5.2. Boundary Conditions ---
-        % At amax: Use FOC with labor supply at boundary
         for j = 1:2
-            params_upper = [amax, z(j), wF, wI, r, ga, Frisch];
-            l_upper = fsolve(@(l) lab_solve_dual(l, params_upper), [1; 1], ...
-                optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10));
-            income_upper = wF*z(j)*l_upper(1) + wI*z(j)*l_upper(2) + r*amax;
-            dVf(I,j) = income_upper^(-ga);
+            income_min = @(l) (1 - tau) * wF * z(j) * l(1) + wI * z(j) * l(2) + r * amin + tr;
+            eq_min = @(l) [l(1)^(1/Frisch) * (income_min(l))^ga - (1 - tau) * wF * z(j);
+                           l(2)^(1/Frisch) * (income_min(l))^ga - wI * z(j)];
+            l_init = [0.5; 0.5];
+            options = optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10);
+            l_sol = fsolve(eq_min, l_init, options);
+            lf_min(j) = max(l_sol(1), 0);
+            li_min(j) = max(l_sol(2), 0);
+            c_min(j) = income_min(l_sol);
+            dV_min(j) = c_min(j)^(-ga);
         end
         
-        % At amin: Enforce state constraint
-        dVb(1,:) = max( (V(2,:) - V(1,:))/da, dV_min );
+        % =================================================================
+        % 5. INNER LOOP: SOLVE HJB (given r, wF, wI, tau, tr)
+        % =================================================================
         
-        % --- 5.3. SOLVE FOR LABOR SUPPLY AND CONSUMPTION ---
-        % Forward direction
-        dVf_pos = max(dVf, 1e-10);
-        cf = real(dVf_pos .^ (-1/ga));
-        lf_f = zeros(I, 2);
-        li_f = zeros(I, 2);
-        
-        for j = 1:2
-            for i = 1:I
-                params = [a(i), z(j), wF, wI, r, ga, Frisch];
-                l_guess = [0.5; 0.5];
-                try
-                    l_sol = fsolve(@(l) lab_solve_dual(l, params), l_guess, ...
-                        optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10));
-                    lf_f(i,j) = max(l_sol(1), 0);
-                    li_f(i,j) = max(l_sol(2), 0);
-                catch
-                    lf_f(i,j) = 0.5;
-                    li_f(i,j) = 0.5;
+        dist = zeros(maxit, 1);
+        for n = 1:maxit
+            V = v;
+            
+            % --- 5.1. Finite Difference Approximations ---
+            dVf(1:I-1,:) = (V(2:I,:) - V(1:I-1,:))/da;
+            dVb(2:I,:) = (V(2:I,:) - V(1:I-1,:))/da;
+            
+            % --- 5.2. Boundary Conditions ---
+            % At amax: Use FOC with labor supply at boundary
+            for j = 1:2
+                params_upper = [amax, z(j), wF, wI, r, ga, Frisch, tau, tr];
+                l_upper = fsolve(@(l) lab_solve_dual(l, params_upper), [1; 1], ...
+                    optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10));
+                income_upper = (1 - tau) * wF * z(j) * l_upper(1) + wI * z(j) * l_upper(2) + r * amax + tr;
+                dVf(I,j) = income_upper^(-ga);
+            end
+            
+            % At amin: Enforce state constraint
+            dVb(1,:) = max( (V(2,:) - V(1,:))/da, dV_min );
+            
+            % --- 5.3. SOLVE FOR LABOR SUPPLY AND CONSUMPTION ---
+            % Forward direction
+            dVf_pos = max(dVf, 1e-10);
+            cf = real(dVf_pos .^ (-1/ga));
+            lf_f = zeros(I, 2);
+            li_f = zeros(I, 2);
+            
+            for j = 1:2
+                for i = 1:I
+                    params = [a(i), z(j), wF, wI, r, ga, Frisch, tau, tr];
+                    l_guess = [0.5; 0.5];
+                    try
+                        l_sol = fsolve(@(l) lab_solve_dual(l, params), l_guess, ...
+                            optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10));
+                        lf_f(i,j) = max(l_sol(1), 0);
+                        li_f(i,j) = max(l_sol(2), 0);
+                    catch
+                        lf_f(i,j) = 0.5;
+                        li_f(i,j) = 0.5;
+                    end
                 end
             end
-        end
-        ssf = wF*zz.*lf_f + wI*zz.*li_f + r*aa - cf;
-        
-        % Backward direction
-        dVb_pos = max(dVb, 1e-10);
-        cb = real(dVb_pos .^ (-1/ga));
-        lf_b = zeros(I, 2);
-        li_b = zeros(I, 2);
-        
-        for j = 1:2
-            for i = 1:I
-                params = [a(i), z(j), wF, wI, r, ga, Frisch];
-                l_guess = [0.5; 0.5];
-                try
-                    l_sol = fsolve(@(l) lab_solve_dual(l, params), l_guess, ...
-                        optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10));
-                    lf_b(i,j) = max(l_sol(1), 0);
-                    li_b(i,j) = max(l_sol(2), 0);
-                catch
-                    lf_b(i,j) = 0.5;
-                    li_b(i,j) = 0.5;
+            ssf = (1 - tau) * wF * zz .* lf_f + wI * zz .* li_f + r * aa + tr * tr_ones - cf;
+            
+            % Backward direction
+            dVb_pos = max(dVb, 1e-10);
+            cb = real(dVb_pos .^ (-1/ga));
+            lf_b = zeros(I, 2);
+            li_b = zeros(I, 2);
+            
+            for j = 1:2
+                for i = 1:I
+                    params = [a(i), z(j), wF, wI, r, ga, Frisch, tau, tr];
+                    l_guess = [0.5; 0.5];
+                    try
+                        l_sol = fsolve(@(l) lab_solve_dual(l, params), l_guess, ...
+                            optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10));
+                        lf_b(i,j) = max(l_sol(1), 0);
+                        li_b(i,j) = max(l_sol(2), 0);
+                    catch
+                        lf_b(i,j) = 0.5;
+                        li_b(i,j) = 0.5;
+                    end
                 end
             end
-        end
-        ssb = wF*zz.*lf_b + wI*zz.*li_b + r*aa - cb;
-        
-        % Zero drift
-        c0 = zeros(I, 2);
-        lf_0 = zeros(I, 2);
-        li_0 = zeros(I, 2);
-        
-        for j = 1:2
-            for i = 1:I
-                params = [a(i), z(j), wF, wI, r, ga, Frisch];
-                l_guess = [0.5; 0.5];
-                try
-                    l_sol = fsolve(@(l) lab_solve_dual(l, params), l_guess, ...
-                        optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10));
-                    lf_0(i,j) = max(l_sol(1), 0);
-                    li_0(i,j) = max(l_sol(2), 0);
-                catch
-                    lf_0(i,j) = 0.5;
-                    li_0(i,j) = 0.5;
+            ssb = (1 - tau) * wF * zz .* lf_b + wI * zz .* li_b + r * aa + tr * tr_ones - cb;
+            
+            % Zero drift
+            c0 = zeros(I, 2);
+            lf_0 = zeros(I, 2);
+            li_0 = zeros(I, 2);
+            
+            for j = 1:2
+                for i = 1:I
+                    params = [a(i), z(j), wF, wI, r, ga, Frisch, tau, tr];
+                    l_guess = [0.5; 0.5];
+                    try
+                        l_sol = fsolve(@(l) lab_solve_dual(l, params), l_guess, ...
+                            optimoptions('fsolve', 'Display', 'off', 'TolFun', 1e-10));
+                        lf_0(i,j) = max(l_sol(1), 0);
+                        li_0(i,j) = max(l_sol(2), 0);
+                    catch
+                        lf_0(i,j) = 0.5;
+                        li_0(i,j) = 0.5;
+                    end
+                    income_0 = (1 - tau) * wF * z(j) * lf_0(i,j) + wI * z(j) * li_0(i,j) + r * a(i) + tr;
+                    c0(i,j) = income_0;
                 end
-                income_0 = wF*z(j)*lf_0(i,j) + wI*z(j)*li_0(i,j) + r*a(i);
-                c0(i,j) = income_0;
+            end
+            dV0 = max(c0 .^ (-ga), 1e-10);
+            
+            % Upwind indicators
+            If = ssf > 0;
+            Ib = ssb < 0 & ~If;
+            I0 = ~(If | Ib);
+            
+            % Construct upwind derivative and policies
+            dV_Upwind = dVf_pos .* If + dVb_pos .* Ib + dV0 .* I0;
+            c = cf .* If + cb .* Ib + c0 .* I0;
+            lf = lf_f .* If + lf_b .* Ib + lf_0 .* I0;
+            li = li_f .* If + li_b .* Ib + li_0 .* I0;
+            
+            % Utility (disutility on intensive labor)
+            u = c .^ (1 - ga) / (1 - ga) - lf .^ (1 + 1/Frisch) / (1 + 1/Frisch) ...
+                - li .^ (1 + 1/Frisch) / (1 + 1/Frisch);
+            
+            % --- 5.4. CONSTRUCT TRANSITION MATRIX A (sparse) ---
+            ss_Upwind = ssf .* If + ssb .* Ib + 0 .* I0;
+            X = -min(ss_Upwind, 0) / da;
+            Y = -max(ss_Upwind, 0) / da + min(ss_Upwind, 0) / da;
+            Z = max(ss_Upwind, 0) / da;
+            
+            A1 = spdiags(Y(:,1), 0, I, I) + spdiags([X(2:I,1); 0], -1, I, I) + ...
+                 spdiags([0; Z(1:I-1,1)], 1, I, I);
+            A2 = spdiags(Y(:,2), 0, I, I) + spdiags([X(2:I,2); 0], -1, I, I) + ...
+                 spdiags([0; Z(1:I-1,2)], 1, I, I);
+            A = [A1, sparse(I,I); sparse(I,I), A2] + Aswitch;
+            
+            % Verify row sums (should be near zero for proper transition)
+            row_sum = sum(A, 2);
+            if max(abs(row_sum)) > 1e-9
+                fprintf('Warning: Improper Transition Matrix at HJB iteration %d\n', n);
+            end
+            
+            % --- 5.5. SOLVE IMPLICIT SYSTEM (per Pontus implicit method) ---
+            B = (1/Delta + rho) * speye(2*I) - A;
+            
+            u_stacked = [u(:,1); u(:,2)];
+            V_stacked = [V(:,1); V(:,2)];
+            
+            b = u_stacked + V_stacked / Delta;
+            V_stacked = B \ b;
+            
+            V = [V_stacked(1:I), V_stacked(I+1:2*I)];
+            
+            % --- 5.6. Check Convergence ---
+            Vchange = V - v;
+            v = V;
+            dist(n) = max(max(abs(Vchange)));
+            
+            if dist(n) < crit
+                fprintf('Value Function Converged at iteration %d for r = %.4f, tr = %.4f\n', n, r, tr)
+                break
             end
         end
-        dV0 = max(c0 .^ (-ga), 1e-10);
         
-        % Upwind indicators
-        If = ssf > 0;
-        Ib = ssb < 0 & ~If;
-        I0 = ~(If | Ib);
+        % =================================================================
+        % 6. KOLMOGOROV FORWARD EQUATION (for stationary distribution)
+        % =================================================================
         
-        % Construct upwind derivative and policies
-        dV_Upwind = dVf_pos.*If + dVb_pos.*Ib + dV0.*I0;
-        c = cf.*If + cb.*Ib + c0.*I0;
-        lf = lf_f.*If + lf_b.*Ib + lf_0.*I0;
-        li = li_f.*If + li_b.*Ib + li_0.*I0;
+        AT = A';
+        b_KF = zeros(2*I, 1);
         
-        % Utility
-        u = c.^(1 - ga)/(1 - ga) - lf.^(1 + 1/Frisch)/(1 + 1/Frisch) ...
-            - li.^(1 + 1/Frisch)/(1 + 1/Frisch);
+        % Fix first element for uniqueness
+        i_fix = 1;
+        b_KF(i_fix) = 0.1;
+        row = [zeros(1, i_fix-1), 1, zeros(1, 2*I - i_fix)];
+        AT(i_fix,:) = row;
         
-        % --- 5.4. CONSTRUCT TRANSITION MATRIX A ---
-        ss_Upwind = ssf .* If + ssb .* Ib + 0 .* I0;
-        X = -min(ss_Upwind, 0) / da;
-        Y = -max(ss_Upwind, 0) / da + min(ss_Upwind, 0) / da;
-        Z = max(ss_Upwind, 0) / da;
+        gg = AT \ b_KF;
+        g_sum = gg' * ones(2*I,1) * da;
+        gg = gg / g_sum;
         
-        % Construct A1 and A2
-        A1 = spdiags(Y(:,1), 0, I, I) + spdiags([X(2:I,1); 0], -1, I, I) + ...
-             spdiags([0; Z(1:I-1,1)], 1, I, I);
-        A2 = spdiags(Y(:,2), 0, I, I) + spdiags([X(2:I,2); 0], -1, I, I) + ...
-             spdiags([0; Z(1:I-1,2)], 1, I, I);
-        A = [A1, sparse(I,I); sparse(I,I), A2] + Aswitch;
+        g = [gg(1:I), gg(I+1:2*I)];
         
-        % Verify row sums
-        row_sum = sum(A, 2);
-        if max(abs(row_sum)) > 1e-9
-            fprintf('Warning: Improper Transition Matrix at iteration %d\n', n);
-        end
+        % --- 6.1. Compute Aggregates ---
+        LF = da * (g(:,1)' * (z(1) * lf(:,1)) + g(:,2)' * (z(2) * lf(:,2)));
+        LI = da * (g(:,1)' * (z(1) * li(:,1)) + g(:,2)' * (z(2) * li(:,2)));
         
-        % --- 5.5. SOLVE IMPLICIT SYSTEM ---
-        B = (1/Delta + rho)*speye(2*I) - A;
+        % Update transfer (government budget: tr = tau * wF * LF)
+        tr_new = tau * wF * LF;
         
-        u_stacked = [u(:,1); u(:,2)];
-        V_stacked = [V(:,1); V(:,2)];
+        % Check convergence for tr
+        dist_tr = abs(tr - tr_new);
+        fprintf('  Transfer iter %d: tr = %.4f, tr_new = %.4f, dist = %.6f\n', itr, tr, tr_new, dist_tr)
         
-        b = u_stacked + V_stacked/Delta;
-        V_stacked = B\b;
+        % Relaxation for stability
+        tr = 0.5 * tr + 0.5 * tr_new;
         
-        V = [V_stacked(1:I), V_stacked(I+1:2*I)];
-        
-        % --- 5.6. Check Convergence ---
-        Vchange = V - v;
-        v = V;
-        dist(n) = max(max(abs(Vchange)));
-        
-        if dist(n) < crit
-            fprintf('Value Function Converged at iteration %d for r = %.4f\n', n, r)
+        if dist_tr < crit_tr
+            fprintf('Transfers Converged at iteration %d for r = %.4f\n', itr, r)
             break
         end
     end
     
-    % =====================================================================
-    % 6. KOLMOGOROV FORWARD EQUATION
-    % =====================================================================
-    
-    AT = A';
-    b_KF = zeros(2*I, 1);
-    
-    % Fix first element
-    i_fix = 1;
-    b_KF(i_fix) = 0.1;
-    row = [zeros(1, i_fix-1), 1, zeros(1, 2*I - i_fix)];
-    AT(i_fix,:) = row;
-    
-    gg = AT\b_KF;
-    g_sum = gg'*ones(2*I,1)*da;
-    gg = gg/g_sum;
-    
-    g = [gg(1:I), gg(I+1:2*I)];
-    
-    % --- 6.1. Store Results ---
+    % --- Store Results After tr Convergence ---
     g_r(:,:,ir) = g;
-    adot(:,:,ir) = wF*zz.*lf + wI*zz.*li + r*aa - c;
+    adot(:,:,ir) = (1 - tau) * wF * zz .* lf + wI * zz .* li + r * aa + tr * tr_ones - c;
     V_r(:,:,ir) = V;
     dV_r(:,:,ir) = dV_Upwind;
     c_r(:,:,ir) = c;
     lf_r(:,:,ir) = lf;
     li_r(:,:,ir) = li;
+    tr_r(ir) = tr;
     
-    % --- KEY CALCULATIONS ---
     % Asset supply
-    S(ir) = g(:,1)'*a*da + g(:,2)'*a*da;
+    S(ir) = g(:,1)' * a * da + g(:,2)' * a * da;
     
-    % Labor supply by sector
-    LF_s(ir) = da * (g(:,1)' * (z(1) * lf(:,1)) + g(:,2)' * (z(2) * lf(:,2)));
-    LI_s(ir) = da * (g(:,1)' * (z(1) * li(:,1)) + g(:,2)' * (z(2) * li(:,2)));
+    % Labor supplies
+    LF_s(ir) = LF;
+    LI_s(ir) = LI;
     
-    % Capital demand (from firm FOCs)
-    % For simplicity, assume equal capital-labor ratios initially
-    % In full equilibrium, need to iterate on capital allocation
-    total_L = LF_s(ir) + LI_s(ir);
-    KF_demand(ir) = (al*AF/(r + d))^(1/(1-al)) * LF_s(ir);
-    KI_demand(ir) = (al*AI/(r + d))^(1/(1-al)) * LI_s(ir);
+    % Capital demands
+    KF_demand(ir) = kappa_F * LF_s(ir);
+    KI_demand(ir) = kappa_I * LI_s(ir);
     
     % Display progress
     if mod(ir, 10) == 0
-        fprintf('r = %.4f: S = %.4f, KF = %.4f, KI = %.4f, LF = %.4f, LI = %.4f\n', ...
-            r, S(ir), KF_demand(ir), KI_demand(ir), LF_s(ir), LI_s(ir))
+        fprintf('r = %.4f: S = %.4f, KF = %.4f, KI = %.4f, LF = %.4f, LI = %.4f, tr = %.4f\n', ...
+            r, S(ir), KF_demand(ir), KI_demand(ir), LF_s(ir), LI_s(ir), tr)
     end
     
 end
@@ -365,6 +388,7 @@ wF_eq = wF_r(idx_eq);
 wI_eq = wI_r(idx_eq);
 LF_eq = LF_s(idx_eq);
 LI_eq = LI_s(idx_eq);
+tr_eq = tr_r(idx_eq);
 
 fprintf('\n=== EQUILIBRIUM ===\n')
 fprintf('r* = %.4f\n', r_eq)
@@ -373,7 +397,9 @@ fprintf('wF* = %.4f\n', wF_eq)
 fprintf('wI* = %.4f\n', wI_eq)
 fprintf('LF* = %.4f\n', LF_eq)
 fprintf('LI* = %.4f\n', LI_eq)
-fprintf('Wage gap (wF/wI) = %.2f\n', wF_eq/wI_eq)
+fprintf('tr* = %.4f\n', tr_eq)
+fprintf('Wage gap (wF/wI) = %.2f\n', wF_eq / wI_eq)
+fprintf('Tax revenue = %.4f (matches tr*)\n', tau * wF_eq * LF_eq)
 
 % =========================================================================
 % 8. PLOT RESULTS
@@ -408,9 +434,9 @@ grid on
 
 % Wage gap
 subplot(2,3,3)
-plot(r_grid, wF_r./wI_r, 'k-', 'LineWidth', 2)
+plot(r_grid, wF_r ./ wI_r, 'k-', 'LineWidth', 2)
 hold on
-plot(r_eq, wF_eq/wI_eq, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'g')
+plot(r_eq, wF_eq / wI_eq, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'g')
 xlabel('Interest Rate r', 'FontSize', 12)
 ylabel('Wage Ratio w^F/w^I', 'FontSize', 12)
 title('Formal-Informal Wage Gap', 'FontSize', 14)
@@ -443,31 +469,29 @@ title('Labor Supply Policies', 'FontSize', 14)
 legend('show', 'Location', 'best')
 grid on
 
-% Consumption policy
+% Transfers
 subplot(2,3,6)
-c_eq = c_r(:,:,idx_eq);
-plot(a, c_eq(:,1), 'b-', 'LineWidth', 2, 'DisplayName', 'z = z_1')
+plot(r_grid, tr_r, 'g-', 'LineWidth', 2)
 hold on
-plot(a, c_eq(:,2), 'r-', 'LineWidth', 2, 'DisplayName', 'z = z_2')
-xlabel('Assets a', 'FontSize', 12)
-ylabel('Consumption c(a,z)', 'FontSize', 12)
-title('Consumption Policy', 'FontSize', 14)
-legend('show')
+plot(r_eq, tr_eq, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'g')
+xlabel('Interest Rate r', 'FontSize', 12)
+ylabel('Lump-Sum Transfer tr', 'FontSize', 12)
+title('Government Transfers', 'FontSize', 14)
 grid on
 
 % Save figure
-print('-dpng', 'aiyagari_two_sectors_results.png', '-r300')
+print('-dpng', 'aiyagari_two_sectors_taxes_results.png', '-r300')
 
 % =========================================================================
 % 9. SAVE RESULTS
 % =========================================================================
 
-save('aiyagari_two_sectors_results.mat', ...
-     'r_grid', 'r_eq', 'K_eq', 'wF_eq', 'wI_eq', 'LF_eq', 'LI_eq', ...
-     'S', 'K_demand', 'KF_demand', 'KI_demand', 'LF_s', 'LI_s', ...
+save('aiyagari_two_sectors_taxes_results.mat', ...
+     'r_grid', 'r_eq', 'K_eq', 'wF_eq', 'wI_eq', 'LF_eq', 'LI_eq', 'tr_eq', ...
+     'S', 'K_demand', 'KF_demand', 'KI_demand', 'LF_s', 'LI_s', 'tr_r', ...
      'V_r', 'g_r', 'c_r', 'lf_r', 'li_r', 'adot', ...
-     'a', 'z', 'ga', 'Frisch', 'rho', 'al', 'd', 'AF', 'AI')
+     'a', 'z', 'ga', 'Frisch', 'rho', 'al', 'd', 'AF', 'AI', 'tau')
 
 fprintf('\n=== SIMULATION COMPLETE ===\n')
-fprintf('Results saved to: aiyagari_two_sectors_results.mat\n')
-fprintf('Figure saved to: aiyagari_two_sectors_results.png\n')
+fprintf('Results saved to: aiyagari_two_sectors_taxes_results.mat\n')
+fprintf('Figure saved to: aiyagari_two_sectors_taxes_results.png\n')
