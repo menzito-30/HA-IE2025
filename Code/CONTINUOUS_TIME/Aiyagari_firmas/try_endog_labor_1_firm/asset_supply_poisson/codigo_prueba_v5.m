@@ -60,8 +60,8 @@ c = zeros(I, 2);   % Consumption policy
 ell = zeros(I, 2); % Labor supply policy
 
 % Transition matrix for productivity shocks
-Aswitch = [-speye(I)*la(1), speye(I)*la(1); 
-           speye(I)*la(2), -speye(I)*la(2)];
+Aswitch = [-speye(I)*la(1), speye(I)*la(1);
+    speye(I)*la(2), -speye(I)*la(2)];
 
 % --- Interest Rate Grid ---
 Ir = 100;         % Number of interest rate points
@@ -88,21 +88,21 @@ v0(:,2) = (w*z(2) + max(r,0.01)*a).^(1 - ga)/(1 - ga)/rho;
 % =========================================================================
 
 for ir = 1:Ir
-    
+
     r = r_grid(ir);
-    
+
     % --- 4.1. Firm Prices (given r) ---
     KD(ir) = (al*Aprod/(r + d))^(1/(1 - al))*z_ave;
     w = (1 - al)*Aprod*(KD(ir)/z_ave)^al;
     w_r(ir) = w;
-    
+
     % --- 4.2. Warm Start ---
     if ir > 1
         v0 = V_r(:,:,ir - 1);
     end
-    
+
     v = v0;
-    
+
     % Precompute boundary labor for state constraint
     ell_min = zeros(1,2);
     c_min = zeros(1,2);
@@ -114,21 +114,21 @@ for ir = 1:Ir
         c_min(j) = income_min(ell_min(j));
         dV_min(j) = c_min(j)^(-ga);
     end
-    
+
     % =====================================================================
     % 5. INNER LOOP: SOLVE HJB (given r and w)
     % =====================================================================
-    
+
     for n = 1:maxit
         V = v;
         % V_n(:,:,n) = V; % Optional: store history
-        
+
         % --- 5.1. Finite Difference Approximations ---
         % Forward derivative
         dVf(1:I-1,:) = (V(2:I,:) - V(1:I-1,:))/da;
         % Backward derivative
         dVb(2:I,:) = (V(2:I,:) - V(1:I-1,:))/da;
-        
+
         % --- 5.2. Boundary Conditions ---
         % At amax: Use FOC with labor supply at boundary
         for j = 1:2
@@ -137,10 +137,10 @@ for ir = 1:Ir
             income_upper = w*z(j)*ell_upper + r*amax;
             dVf(I,j) = income_upper^(-ga);
         end
-        
+
         % At amin: Enforce state constraint
         dVb(1,:) = max( (V(2,:) - V(1,:))/da, dV_min );  % Ensure >= constraint
-        
+
         % --- 5.3. UPWIND SCHEME WITH ENDOGENOUS LABOR (Revised) ---
         % Forward difference
         dVf_pos = max(dVf, 1e-10);  % Avoid negative derivatives
@@ -157,7 +157,7 @@ for ir = 1:Ir
             end
         end
         ssf = w*zz.*ell_f + r*aa - cf;
-        
+
         % Backward difference
         dVb_pos = max(dVb, 1e-10);
         cb = real(dVb_pos .^ (-1/ga));
@@ -173,7 +173,7 @@ for ir = 1:Ir
             end
         end
         ssb = w*zz.*ell_b + r*aa - cb;
-        
+
         % Zero drift
         c0 = zeros(I, 2);
         ell_0 = zeros(I, 2);
@@ -189,34 +189,34 @@ for ir = 1:Ir
             end
         end
         dV0 = max(c0 .^ (-ga), 1e-10);  % Ensure positive
-        
+
         % Upwind indicators
         If = ssf > 0;
         Ib = ssb < 0 & ~If;
         I0 = ~(If | Ib);
-        
+
         % Construct upwind derivative and policies
         dV_Upwind = dVf_pos.*If + dVb_pos.*Ib + dV0.*I0;
         c = cf.*If + cb.*Ib + c0.*I0;
         ell = ell_f.*If + ell_b.*Ib + ell_0.*I0;
-        
+
         % Utility
         u = c.^(1 - ga)/(1 - ga) - ell.^(1 + 1/Frisch)/(1 + 1/Frisch);
-        
+
         % --- 5.4. CONSTRUCT TRANSITION MATRIX A (Revised) ---
         % Use upwind savings for consistency
         ss_Upwind = ssf .* If + ssb .* Ib + 0 .* I0;  % Drift based on upwind scheme
         X = -min(ss_Upwind, 0) / da;
         Y = -max(ss_Upwind, 0) / da + min(ss_Upwind, 0) / da;  % Initial Y
         Z = max(ss_Upwind, 0) / da;
-        
+
         % Construct A1 and A2
         A1 = spdiags(Y(:,1), 0, I, I) + spdiags([X(2:I,1); 0], -1, I, I) + ...
-             spdiags([0; Z(1:I-1,1)], 1, I, I);
+            spdiags([0; Z(1:I-1,1)], 1, I, I);
         A2 = spdiags(Y(:,2), 0, I, I) + spdiags([X(2:I,2); 0], -1, I, I) + ...
-             spdiags([0; Z(1:I-1,2)], 1, I, I);
+            spdiags([0; Z(1:I-1,2)], 1, I, I);
         A = [A1, sparse(I,I); sparse(I,I), A2] + Aswitch;
-        
+
         % Verify and adjust row sums
         row_sum = sum(A, 2);
         if max(abs(row_sum)) > 1e-9
@@ -225,61 +225,61 @@ for ir = 1:Ir
             Y(:,2) = Y(:,2) - row_sum(I+1:2*I) / I;
             % Reconstruct
             A1 = spdiags(Y(:,1), 0, I, I) + spdiags([X(2:I,1); 0], -1, I, I) + ...
-                 spdiags([0; Z(1:I-1,1)], 1, I, I);
+                spdiags([0; Z(1:I-1,1)], 1, I, I);
             A2 = spdiags(Y(:,2), 0, I, I) + spdiags([X(2:I,2); 0], -1, I, I) + ...
-                 spdiags([0; Z(1:I-1,2)], 1, I, I);
+                spdiags([0; Z(1:I-1,2)], 1, I, I);
             A = [A1, sparse(I,I); sparse(I,I), A2] + Aswitch;
             if max(abs(sum(A, 2))) > 1e-9
                 disp('Adjustment failed - Check drift terms');
                 break;
             end
         end
-        
+
         % --- 5.5. SOLVE IMPLICIT SYSTEM ---
         B = (1/Delta + rho)*speye(2*I) - A;
-        
+
         u_stacked = [u(:,1); u(:,2)];
         V_stacked = [V(:,1); V(:,2)];
-        
+
         b = u_stacked + V_stacked/Delta;
         V_stacked = B\b;
-        
+
         V = [V_stacked(1:I), V_stacked(I+1:2*I)];
-        
+
         % --- 5.6. Check Convergence ---
         Vchange = V - v;
         v = V;
         dist(n) = max(max(abs(Vchange)));
-        
+
         if dist(n) < crit
             fprintf('Value Function Converged at iteration %d for r = %.4f\n', n, r)
             break
         end
     end
-    
+
     % =====================================================================
     % 6. KOLMOGOROV FORWARD EQUATION
     % =====================================================================
-    
+
     AT = A';
     b = zeros(2*I, 1);
-    
+
     % Fix first element
     i_fix = 1;
     b(i_fix) = 0.1;
     row = [zeros(1, i_fix-1), 1, zeros(1, 2*I - i_fix)];
     AT(i_fix,:) = row;
-    
+
     gg = AT\b;
     g_sum = gg'*ones(2*I,1)*da;
     gg = gg/g_sum;
-    
+
     g = [gg(1:I), gg(I+1:2*I)];
-    
+
     % Checks
     check1 = g(:,1)'*ones(I,1)*da;
     check2 = g(:,2)'*ones(I,1)*da;
-    
+
     % --- 6.1. Store Results ---
     g_r(:,:,ir) = g;
     adot(:,:,ir) = w*zz.*ell + r*aa - c;  % Savings policy
@@ -287,19 +287,19 @@ for ir = 1:Ir
     dV_r(:,:,ir) = dV_Upwind;
     c_r(:,:,ir) = c;
     ell_r(:,:,ir) = ell;
-    
+
     % --- KEY CALCULATION: AGGREGATE ASSET SUPPLY S(r) ---
     S(ir) = g(:,1)'*a*da + g(:,2)'*a*da;
-    
+
     % Compute aggregate effective labor (for reference; add outer loop for full GE)
     L_s(ir) = da * (g(:,1)' * (z(1) * ell(:,1)) + g(:,2)' * (z(2) * ell(:,2)));
     % Note: For full equilibrium, iterate w until L_s ≈ z_ave * mean(ell)
-    
+
     % Display progress
     if mod(ir, 10) == 0
         fprintf('Completed r iteration %d/%d, S = %.4f, L_s = %.4f\n', ir, Ir, S(ir), L_s(ir))
     end
-    
+
 end
 
 toc; % End timer
@@ -336,16 +336,16 @@ legend('show', 'Location', 'best')
 grid on
 xlim([amin1 0.6])
 
-% Save figure
-print('-dpng', 'aiyagari_endog_labor_equilibrium.png', '-r300')
+% Save figure to output_graphs folder
+print('-dpng', 'output_graphs/aiyagari_endog_labor_equilibrium.png', '-r300')
 
 % =========================================================================
 % 8. SAVE RESULTS
 % =========================================================================
 
 save('aiyagari_endog_labor_results.mat', ...
-     'r_grid', 'S', 'KD', 'w_r', 'V_r', 'g_r', 'c_r', 'ell_r', ...
-     'adot', 'a', 'z', 'ga', 'Frisch', 'rho', 'al', 'd', 'L_s')
+    'r_grid', 'S', 'KD', 'w_r', 'V_r', 'g_r', 'c_r', 'ell_r', ...
+    'adot', 'a', 'z', 'ga', 'Frisch', 'rho', 'al', 'd', 'L_s')
 
 fprintf('\n=== SIMULATION COMPLETE ===\n')
 fprintf('Results saved\n')
