@@ -15,7 +15,7 @@ tic;
 % 0. EQUILIBRIUM MODE SELECTOR
 % =========================================================================
 
-EQUILIBRIUM_MODE = 2;  % 1 = Partial (curve S(r)), 2 = General (find r*)
+EQUILIBRIUM_MODE = 1;  % 1 = Partial (curve S(r)), 2 = General (find r*)
 
 % =========================================================================
 % 1. PARAMETERS
@@ -360,12 +360,10 @@ if EQUILIBRIUM_MODE == 1
     % Partial: plot S(r) vs K^D(r)
     figure('Position', [100, 100, 700, 500])
     Smax = max(S);
-    rrr = linspace(-0.06, 0.06, 100);
-    KD_plot = (al*Aprod./(max(rrr + d, 1e-6))).^(1/(1 - al))*z_ave;
-
     plot(S, r_grid, 'b-', 'LineWidth', 2.5)
     hold on
-    plot(KD_plot, rrr, 'r-', 'LineWidth', 2.5)
+    % Use the computed KD (which accounts for endogenous labor) instead of synthetic one
+    plot(KD, r_grid, 'r-', 'LineWidth', 2.5)
     plot([0 max(Smax,0.6)], [rho rho], 'k--', 'LineWidth', 1)
     plot([0 max(Smax,0.6)], [-d -d], 'k--', 'LineWidth', 1)
 
@@ -381,7 +379,9 @@ else
     % General: show equilibrium point
     figure('Position', [100, 100, 700, 500])
     rrr = linspace(-0.06, 0.06, 100);
-    KD_plot = (al*Aprod./(max(rrr + d, 1e-6))).^(1/(1 - al))*z_ave;
+    % Update: Plot KD curve assuming Labor stays at equilibrium level L_F_star
+    % This shows the demand curve CONSISTENT with the final labor supply.
+    KD_plot = (al*Aprod./(max(rrr + d, 1e-6))).^(1/(1 - al)) * L_F_star;
 
     plot(KD_plot, rrr, 'r-', 'LineWidth', 2.5)
     hold on
@@ -574,8 +574,10 @@ function [S, KD, w_F, L_F, L_I, V, g, c, ell_F, ell_I, v0_out] = ...
     Aprod, al, d, A_I, z_ave, I, da, aa, zz, maxit, crit, Delta, Aswitch)
 
 % Firm prices
-KD = (al*Aprod/(r + d))^(1/(1 - al))*z_ave;
-w_F = (1 - al)*Aprod*(KD/z_ave)^al;
+% 1. Capital-Labor ratio determined by r (FOC)
+k_ratio = (al*Aprod/(r + d))^(1/(1 - al));
+% 2. Wage determined by k_ratio
+w_F = (1 - al)*Aprod*(k_ratio)^al;
 w_I = A_I;
 
 v = v0;
@@ -713,6 +715,11 @@ g = [gg(1:I), gg(I+1:2*I)];
 S = g(:,1)'*a*da + g(:,2)'*a*da;
 L_F = da * (g(:,1)' * (z(1) * ell_F(:,1)) + g(:,2)' * (z(2) * ell_F(:,2)));
 L_I = da * (g(:,1)' * (theta*z(1) * ell_I(:,1)) + g(:,2)' * (theta*z(2) * ell_I(:,2)));
+
+% UPDATE KD consistent with Endogenous Labor
+% The firm FOC implies K/L ratio is fixed by r.
+% So Capital Demand must scale with Labor Supply L_F.
+KD = k_ratio * L_F;
 
 v0_out = V;
 
