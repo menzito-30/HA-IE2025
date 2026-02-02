@@ -15,7 +15,7 @@ tic;
 % 0. EQUILIBRIUM MODE SELECTOR
 % =========================================================================
 
-EQUILIBRIUM_MODE = 1;  % 1 = Partial (curve S(r)), 2 = General (find r*)
+EQUILIBRIUM_MODE = 2;  % 1 = Partial (curve S(r)), 2 = General (find r*)
 
 % =========================================================================
 % 1. PARAMETERS
